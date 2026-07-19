@@ -62,12 +62,14 @@ android {
     }
 }
 
+
 dependencies {
+
+
     implementation(files("libs/BaiduTraceSDK_v3_2_2.jar"))
     implementation(files("libs/bos-android-sdk-1.0.3.jar"))
     implementation(files("libs/galaxy_lite_lbs_v2.7.jar"))
 
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
     implementation("androidx.core:core-splashscreen:1.2.0")
     implementation("com.airbnb.android:lottie-compose:6.7.1")
     implementation("androidx.datastore:datastore-preferences:1.0.0")
@@ -77,15 +79,15 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
-    // 百度地图 SDK（仅地图展示，定位复用 Google Play Services Location）
-    implementation("com.baidu.lbsyun:BaiduMapSDK_Map:7.4.0")
+    // 百度地图 SDK
+    implementation("com.baidu.lbsyun:BaiduMapSDK_Location_All:9.6.4")
+    implementation("com.baidu.lbsyun:BaiduMapSDK_Map:7.6.4")
 
 
     configurations.all {
         exclude(group = "com.intellij", module = "annotations")
     }
 
-    implementation(libs.play.services.location)
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

@@ -3,31 +3,27 @@ package com.example.myweather.data.location
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.location.Location
-import android.os.Looper
 import androidx.core.content.ContextCompat
+import com.baidu.location.BDAbstractLocationListener
+import com.baidu.location.BDLocation
+import com.baidu.location.LocationClient as BaiduLocationClient
+import com.baidu.location.LocationClientOption
 import com.example.myweather.LocationData
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
-import com.google.android.gms.location.Priority
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.tasks.await   // 关键导入
 
-interface LocationClient {
-    fun getLocation(): Flow<Resource<LocationData>>
+// 定义通用的 Resource 结果类（如果项目中已有可删除本定义）
+sealed class Resource<out T> {
+    data class Loading<T>(val data: T? = null) : Resource<T>()
+    data class Success<T>(val data: T) : Resource<T>()
+    data class Error<T>(val message: String) : Resource<T>()
 }
 
-class DefaultLocationClient(
-    private val context: Context,
-    private val client: FusedLocationProviderClient
-) : LocationClient {
-    override fun getLocation(): Flow<Resource<LocationData>> = callbackFlow {
+class LocationClient(private val context: Context) {
+    fun getLocation(): Flow<Resource<LocationData>> = callbackFlow {
         val fineGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val coarseGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
@@ -37,62 +33,53 @@ class DefaultLocationClient(
             return@callbackFlow
         }
 
-        // 最后已知位置（快速）
-        try {
-            val lastLocation: Location? = client.lastLocation.await()
-            if (lastLocation != null) {
-                trySend(Resource.Success(LocationData(lastLocation.latitude, lastLocation.longitude)))
-                close()
-                return@callbackFlow
-            }
-        } catch (_: Exception) { }
+        // ✅ 关键修复：同意隐私政策
+        BaiduLocationClient.setAgreePrivacy(true)
 
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L)
-            .setMinUpdateIntervalMillis(2000L)
-            .build()
+        val locationClient = BaiduLocationClient(context)
+        val option = LocationClientOption().apply {
+            locationMode = LocationClientOption.LocationMode.Hight_Accuracy
+            coorType = "bd09ll"
+            scanSpan = 1000
+            setIsNeedAddress(false)
+            setIsNeedLocationPoiList(false)
+        }
+        locationClient.locOption = option
 
         var isLocationReceived = false
-        val locationCallback = object : LocationCallback() {
-            override fun onLocationResult(result: LocationResult) {
-                result.locations.lastOrNull()?.let { location ->
-                    if (!isLocationReceived) {
-                        isLocationReceived = true
-                        trySend(Resource.Success(LocationData(location.latitude, location.longitude)))
-                        close()
-                    }
-                }
-            }
-        }
 
-        trySend(Resource.Loading())
-
-        val timeoutJob = launch {
-            delay(12000L)
-            if (!isLocationReceived) {
-                val defaultLocation = LocationData(39.91489, 116.40387)
-                trySend(Resource.Success(defaultLocation))
-                close()
-            }
-        }
-
-        client.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
-            .addOnFailureListener { error ->
-                timeoutJob.cancel()
-                if (!isLocationReceived) {
-                    trySend(Resource.Error("Location request failed: ${error.localizedMessage}"))
+        val listener = object : BDAbstractLocationListener() {
+            override fun onReceiveLocation(location: BDLocation) {
+                if (!isLocationReceived &&
+                    (location.locType == BDLocation.TypeGpsLocation ||
+                            location.locType == BDLocation.TypeNetWorkLocation)) {
+                    isLocationReceived = true
+                    val data = LocationData(location.latitude, location.longitude)
+                    trySend(Resource.Success(data))
                     close()
                 }
             }
+        }
+
+        locationClient.registerLocationListener(listener)
+        locationClient.start()
+
+        trySend(Resource.Loading())
+
+        // 超时处理（10秒后如果还没定位成功，使用默认位置）
+        val timeoutJob = launch {
+            delay(10000L)
+            if (!isLocationReceived) {
+                // 默认位置（北京天安门）
+                trySend(Resource.Success(LocationData(39.91489, 116.40387)))
+                close()
+            }
+        }
 
         awaitClose {
             timeoutJob.cancel()
-            client.removeLocationUpdates(locationCallback)
+            locationClient.stop()
+            locationClient.unRegisterLocationListener(listener)
         }
     }
-}
-
-sealed class Resource<T>(val data: T? = null, val message: String? = null) {
-    class Success<T>(data: T) : Resource<T>(data)
-    class Error<T>(message: String, data: T? = null) : Resource<T>(data, message)
-    class Loading<T> : Resource<T>()
 }

@@ -1,9 +1,9 @@
 package com.example.myweather
 
 import android.location.Location
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.myweather.LocationData
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -123,9 +123,12 @@ class SportViewModel : ViewModel() {
                     results
                 )
                 val segment = results[0]
-                // 过滤掉明显异常的漂移点（单次 > 200m 视为 GPS 漂移）
-                if (segment in 0.5f..200f) {
+                // 放宽过滤条件：大于 0.1 米且小于 500 米（防止 GPS 漂移）
+                if (segment > 0.1f && segment < 500f) {
                     _distanceMeters.value += segment
+                    Log.d("SportVM", "距离增加 ${"%.2f".format(segment)}m，累计 ${"%.2f".format(_distanceMeters.value)}m")
+                } else {
+                    Log.d("SportVM", "位移被过滤: ${"%.2f".format(segment)}m")
                 }
             }
             _pathPoints.value = _pathPoints.value + location

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -14,7 +15,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.baidu.mapapi.map.MapStatusUpdateFactory
 import com.baidu.mapapi.map.MapView
+import com.baidu.mapapi.model.LatLng
+import android.content.Context
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,9 +41,11 @@ fun SportScreen(
     val targetTimeMinutes by viewModel.targetTimeMinutes.collectAsState()
     val targetDistanceKm by viewModel.targetDistanceKm.collectAsState()
     val finishReason by viewModel.finishReason.collectAsState()
+    val currentLocation by viewModel.currentLocation.collectAsState()  // 新增
 
     var showFinishDialog by remember { mutableStateOf(false) }
     var finishMessage by remember { mutableStateOf("") }
+
 
     // 目标达成弹窗
     LaunchedEffect(finishReason) {
@@ -43,8 +53,17 @@ fun SportScreen(
             finishMessage = it
             showFinishDialog = true
             viewModel.consumeFinishReason()
+
+            val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(500)
+            }
         }
     }
+
 
     Box(modifier = Modifier.fillMaxSize()) {
         // 百度地图
@@ -68,6 +87,34 @@ fun SportScreen(
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0f)
                 )
+            )
+        }
+
+        // ✅ 悬浮定位按钮（右下角，靠近“选择运动模式”面板）
+        FloatingActionButton(
+            onClick = {
+                currentLocation?.let { loc ->
+                    val latLng = LatLng(loc.latitude, loc.longitude)
+                    mapView.map.animateMapStatus(
+                        MapStatusUpdateFactory.newLatLngZoom(latLng, 18f)
+                    )
+                } ?: run {
+                    Toast.makeText(context, "尚未获取到位置", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 280.dp) // 根据底部面板高度调整
+                .size(40.dp),
+
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary
+        ) {
+            Icon(
+                Icons.Default.MyLocation,
+                contentDescription = "定位到当前位置",
+                modifier = Modifier
+                    .size(20.dp)
             )
         }
 
