@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.MyWeather" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.App.Splash" parent="Theme.SplashScreen">
+        <!-- 启动页面背景颜色 -->
+        <item name="windowSplashScreenBackground">@color/white</item>
+        <!-- 你想展示的静态图标 -->
+        <item name="windowSplashScreenAnimatedIcon">@drawable/img</item>
+        <!-- 动画时长，用于和你的 Lottie 动画同步 -->
+        <item name="windowSplashScreenAnimationDuration">800</item>
+        <!-- 动画结束后，无缝过渡到的主应用主题 -->
+        <item name="postSplashScreenTheme">@style/Theme.MyWeather</item>
+        <!-- 可选：图标在屏幕中显示的位置 -->
+        <item name="windowSplashScreenIconBackgroundColor">@color/white</item>
+    </style>
+</resources>
