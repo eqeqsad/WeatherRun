@@ -6,7 +6,9 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
@@ -37,21 +39,18 @@ import com.example.myweather.data.mode.WeatherAlert
 import com.example.myweather.data.mode.WeatherForecast
 import com.example.myweather.data.mode.WeatherForecastHour
 import com.example.myweather.data.mode.WeatherIndex
-import com.example.myweather.data.mode.WeatherResponse
 import kotlin.random.Random
 
-
-
-
-
 @Composable
-fun WeatherScreen(viewModel: WeatherViewModel) {
+fun WeatherScreen(
+    viewModel: WeatherViewModel
+    // 移除未使用的 onSelectCity 参数
+) {
     val permissionState by viewModel.permissionState.collectAsState()
     val locationState by viewModel.locationState.collectAsState()
     val weatherState by viewModel.weatherState.collectAsState()
-    val selectedCity by viewModel.selectedCity.collectAsState()   // 新增
 
-    var showCityManager by remember { mutableStateOf(false) }     // 控制弹窗
+    var showCityManager by remember { mutableStateOf(false) }
 
     val locationPermissions = arrayOf(
         Manifest.permission.ACCESS_FINE_LOCATION,
@@ -61,17 +60,32 @@ fun WeatherScreen(viewModel: WeatherViewModel) {
         viewModel.onEvent(WeatherEvent.PermissionResult(perms))
     }
 
-    // 监听权限变化，一旦获得权限就请求位置
-    LaunchedEffect(permissionState.hasAnyLocationPermission()) {
-        if (permissionState.hasAnyLocationPermission()) {
-            viewModel.onEvent(WeatherEvent.RequestLocation)
+    val searchCityLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val data = result.data
+            val cityName = data?.getStringExtra("city_name") ?: return@rememberLauncherForActivityResult
+            val lat = data.getDoubleExtra("lat", 0.0)
+            val lon = data.getDoubleExtra("lon", 0.0)
+            if (cityName.isNotEmpty() && lat != 0.0 && lon != 0.0) {
+                Log.d("WeatherScreen", "Received city: $cityName, $lat, $lon")
+                viewModel.addCity(CityWeather(cityName, lat, lon))
+                viewModel.selectCity(CityWeather(cityName, lat, lon))
+            }
         }
     }
 
-    // 首次启动时如果没有权限则请求权限
     LaunchedEffect(Unit) {
         if (!permissionState.hasAnyLocationPermission()) {
             permissionLauncher.launch(locationPermissions)
+        }
+    }
+
+    LaunchedEffect(permissionState.hasAnyLocationPermission()) {
+        if (permissionState.hasAnyLocationPermission() && weatherState.currentWeather == null && !weatherState.isLoading) {
+            // 使用新的强制刷新方法
+            viewModel.refreshLocationForced()
         }
     }
 
@@ -91,49 +105,55 @@ fun WeatherScreen(viewModel: WeatherViewModel) {
         locationState.error != null -> {
             ErrorScreen(
                 message = locationState.error!!,
-                onRetry = { viewModel.onEvent(WeatherEvent.RequestLocation) }
+                onRetry = { viewModel.refreshLocationForced() }  // 修正为强制刷新
             )
         }
         weatherState.currentWeather != null -> {
-            WeatherContent(
-                weather = weatherState.currentWeather!!,
-                onRefresh = { viewModel.refreshCurrentWeather() },   // 刷新方法
-                viewModel = viewModel
-            )
+            key(weatherState.currentWeather) {
+                WeatherContent(
+                    viewModel = viewModel,
+                    searchCityLauncher = searchCityLauncher
+                )
+            }
         }
         else -> {
             EmptyWeather()
         }
     }
 
-    // 城市管理弹窗
     if (showCityManager) {
         CityManagerBottomSheet(
             onDismiss = { showCityManager = false },
             viewModel = viewModel
-
         )
     }
 }
 
 @Composable
-fun WeatherContent(weather: WeatherResponse, onRefresh: () -> Unit, viewModel: WeatherViewModel) {
+fun WeatherContent(
+    viewModel: WeatherViewModel,
+    searchCityLauncher: androidx.activity.compose.ManagedActivityResultLauncher<Intent, ActivityResult>
+) {
     val scrollState = rememberScrollState()
+    val weatherState by viewModel.weatherState.collectAsState()
+    val weather = weatherState.currentWeather ?: return
     val result = weather.result ?: return
-
     val context = LocalContext.current
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // 可滚动的天气内容（上方留出空间）
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
                 .padding(16.dp)
-                .padding(bottom = 80.dp),  // 底部预留按钮空间
+                .padding(bottom = 80.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            CurrentWeatherSection(weather, viewModel)
+            CurrentWeatherSection(
+                viewModel = viewModel,
+                searchCityLauncher = searchCityLauncher
+            )
+
             result.forecastHours?.takeIf { it.isNotEmpty() }?.let { hours ->
                 HourlyForecastSection(hours)
             }
@@ -147,16 +167,14 @@ fun WeatherContent(weather: WeatherResponse, onRefresh: () -> Unit, viewModel: W
                 AlertSection(alerts)
             }
             Button(
-                onClick = onRefresh,
+                onClick = { viewModel.refreshCurrentWeather() },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Text("刷新天气")
             }
-            // 注意：原来的“去运动”按钮已移除，改为固定底部
         }
 
-        // 固定在底部的“去运动”按钮
         Button(
             onClick = {
                 val intent = Intent(context, SportActivity::class.java)
@@ -164,7 +182,7 @@ fun WeatherContent(weather: WeatherResponse, onRefresh: () -> Unit, viewModel: W
             },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .fillMaxWidth(0.4f)  // 宽度为屏幕的 40%
+                .fillMaxWidth(0.4f)
                 .padding(bottom = 150.dp),
             shape = RoundedCornerShape(28.dp),
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
@@ -176,103 +194,47 @@ fun WeatherContent(weather: WeatherResponse, onRefresh: () -> Unit, viewModel: W
     }
 }
 
-// ==================== 动态背景渐变 ====================
+// ==================== 当前天气卡片 ====================
 @Composable
-fun weatherBackgroundGradient(weatherText: String?): Brush {
-    val text = weatherText?.lowercase() ?: ""
-    return when {
-        text.contains("晴") || text.contains("sun") -> Brush.verticalGradient(
-            colors = listOf(Color(0xFFFFD89C), Color(0xFFFFB347))
-        )
-        text.contains("多云") || text.contains("cloud") -> Brush.verticalGradient(
-            colors = listOf(Color(0xFFB0BEC5), Color(0xFF78909C))
-        )
-        text.contains("阴") -> Brush.verticalGradient(
-            colors = listOf(Color(0xFF90A4AE), Color(0xFF607D8B))
-        )
-        text.contains("雨") || text.contains("rain") -> Brush.verticalGradient(
-            colors = listOf(Color(0xFF455A64), Color(0xFF263238))
-        )
-        text.contains("雪") || text.contains("snow") -> Brush.verticalGradient(
-            colors = listOf(Color(0xFFE0E0E0), Color(0xFFBDBDBD))
-        )
-        else -> Brush.verticalGradient(
-            colors = listOf(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.primaryContainer)
-        )
-    }
-}
+fun CurrentWeatherSection(
+    viewModel: WeatherViewModel,
+    searchCityLauncher: androidx.activity.compose.ManagedActivityResultLauncher<Intent, ActivityResult>
+) {
+    val weatherState by viewModel.weatherState.collectAsState()
+    val selectedCityName by viewModel.selectedCity.collectAsState()
 
-// ==================== 下雨特效 ====================
-data class RainDrop(
-    val x: Float,
-    val y: Float,
-    val speed: Float,
-    val length: Float,
-    val angle: Float
-)
-
-@Composable
-fun RainEffect(modifier: Modifier = Modifier) {
-    val infiniteTransition = rememberInfiniteTransition()
-    // 存储雨滴列表，当 Canvas 尺寸变化时重新生成
-    var rainDrops by remember { mutableStateOf(listOf<RainDrop>()) }
-    var canvasWidth by remember { mutableStateOf(0f) }
-
-    val animationProgress by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        )
-    )
-
-    Canvas(
-        modifier = modifier
-    ) {
-        // 当画布宽度变化时（包括初始值），重新生成雨滴
-        if (canvasWidth != size.width) {
-            canvasWidth = size.width
-            rainDrops = List(60) {
-                RainDrop(
-                    x = Random.nextFloat() * size.width,
-                    y = Random.nextFloat() * size.height,
-                    speed = Random.nextFloat() * 8f + 4f,
-                    length = Random.nextFloat() * 12f + 8f,
-                    angle = 0.2f
-                )
+    val weather = weatherState.currentWeather
+    if (weather == null) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp)
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(Color(0xFF455A64), Color(0xFF263238))
+                    ),
+                    shape = RoundedCornerShape(24.dp)
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (weatherState.isLoading) {
+                CircularProgressIndicator(color = Color.White)
+            } else {
+                Text("加载天气数据...", color = Color.White)
             }
         }
-
-        // 绘制雨滴
-        rainDrops.forEach { drop ->
-            val deltaY = (drop.speed * 30f * animationProgress) % (size.height + drop.length)
-            val currentY = (drop.y + deltaY) % (size.height + drop.length) - drop.length
-            drawLine(
-                color = Color.White.copy(alpha = 0.5f),
-                start = Offset(drop.x, currentY),
-                end = Offset(drop.x - drop.angle * drop.length, currentY + drop.length),
-                strokeWidth = 2f,
-                cap = StrokeCap.Round
-            )
-        }
+        return
     }
-}
 
-// ==================== 当前天气卡片（修改：增加可点击城市名） ====================
-@Composable
-fun CurrentWeatherSection(weather: WeatherResponse, viewModel: WeatherViewModel) {
     val result = weather.result ?: return
     val location = result.location
     val now = result.now
     val weatherText = now?.text
     val isRainy = weatherText?.lowercase()?.contains("雨") == true
 
-    val selectedCityName by viewModel.selectedCity.collectAsState()
-    val displayCity = selectedCityName ?: (location?.city ?: "未知城市")
+    val context = LocalContext.current
+    val displayCity = selectedCityName ?: (location?.name ?: "未知城市")
     val displayDistrict = if (selectedCityName == null) location?.district else null
-
-    var showCityManager by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -296,16 +258,18 @@ fun CurrentWeatherSection(weather: WeatherResponse, viewModel: WeatherViewModel)
                 modifier = Modifier.padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // 城市名称行（可点击）
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { showCityManager = true }
+                    modifier = Modifier.clickable {
+                        val intent = Intent(context, SearchCity::class.java)
+                        searchCityLauncher.launch(intent)
+                    }
                 ) {
                     Text(
                         text = buildString {
                             append(displayCity)
                             if (!displayDistrict.isNullOrBlank()) {
-                                append(" · ${displayDistrict}")
+                                append(" · $displayDistrict")
                             }
                         },
                         style = MaterialTheme.typography.headlineSmall,
@@ -351,7 +315,6 @@ fun CurrentWeatherSection(weather: WeatherResponse, viewModel: WeatherViewModel)
                         label = "风速",
                         value = buildString {
                             append(now?.windDir ?: "")
-
                             if (!now?.windClass.isNullOrBlank()) {
                                 if (now.windDir != null) append(" ")
                                 append(now.windClass)
@@ -416,15 +379,90 @@ fun CurrentWeatherSection(weather: WeatherResponse, viewModel: WeatherViewModel)
             }
         }
     }
+}
 
-    if (showCityManager) {
-        CityManagerBottomSheet(
-            onDismiss = { showCityManager = false },
-            viewModel = viewModel
+// ==================== 动态背景渐变 ====================
+@Composable
+fun weatherBackgroundGradient(weatherText: String?): Brush {
+    val text = weatherText?.lowercase() ?: ""
+    return when {
+        text.contains("晴") || text.contains("sun") -> Brush.verticalGradient(
+            colors = listOf(Color(0xFFFFD89C), Color(0xFFFFB347))
+        )
+        text.contains("多云") || text.contains("cloud") -> Brush.verticalGradient(
+            colors = listOf(Color(0xFFB0BEC5), Color(0xFF78909C))
+        )
+        text.contains("阴") -> Brush.verticalGradient(
+            colors = listOf(Color(0xFF90A4AE), Color(0xFF607D8B))
+        )
+        text.contains("雨") || text.contains("rain") -> Brush.verticalGradient(
+            colors = listOf(Color(0xFF455A64), Color(0xFF263238))
+        )
+        text.contains("雪") || text.contains("snow") -> Brush.verticalGradient(
+            colors = listOf(Color(0xFFE0E0E0), Color(0xFFBDBDBD))
+        )
+        else -> Brush.verticalGradient(
+            colors = listOf(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.primaryContainer)
         )
     }
 }
 
+// ==================== 下雨特效 ====================
+data class RainDrop(
+    val x: Float,
+    val y: Float,
+    val speed: Float,
+    val length: Float,
+    val angle: Float
+)
+
+@Composable
+fun RainEffect(modifier: Modifier = Modifier) {
+    val infiniteTransition = rememberInfiniteTransition()
+    var rainDrops by remember { mutableStateOf(listOf<RainDrop>()) }
+    // 使用 mutableFloatStateOf 优化 Float 状态
+    var canvasWidth by remember { mutableFloatStateOf(0f) }
+
+    val animationProgress by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        )
+    )
+
+    Canvas(
+        modifier = modifier
+    ) {
+        if (canvasWidth != size.width) {
+            canvasWidth = size.width
+            rainDrops = List(60) {
+                RainDrop(
+                    x = Random.nextFloat() * size.width,
+                    y = Random.nextFloat() * size.height,
+                    speed = Random.nextFloat() * 8f + 4f,
+                    length = Random.nextFloat() * 12f + 8f,
+                    angle = 0.2f
+                )
+            }
+        }
+
+        rainDrops.forEach { drop ->
+            val deltaY = (drop.speed * 30f * animationProgress) % (size.height + drop.length)
+            val currentY = (drop.y + deltaY) % (size.height + drop.length) - drop.length
+            drawLine(
+                color = Color.White.copy(alpha = 0.5f),
+                start = Offset(drop.x, currentY),
+                end = Offset(drop.x - drop.angle * drop.length, currentY + drop.length),
+                strokeWidth = 2f,
+                cap = StrokeCap.Round
+            )
+        }
+    }
+}
+
+// ==================== 辅助UI组件 ====================
 @Composable
 private fun InfoItem(label: String, value: String, textColor: Color = MaterialTheme.colorScheme.onSurface) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -665,7 +703,7 @@ fun AlertSection(alerts: List<WeatherAlert>) {
     }
 }
 
-// ==================== 辅助UI组件 ====================
+// ==================== 通用UI ====================
 @Composable
 fun ErrorScreen(message: String?, onRetry: () -> Unit) {
     Column(
@@ -765,6 +803,7 @@ fun CityManagerBottomSheet(
             if (cityName.isNotEmpty() && lat != 0.0 && lon != 0.0) {
                 viewModel.addCity(CityWeather(cityName, lat, lon))
                 viewModel.selectCity(CityWeather(cityName, lat, lon))
+                onDismiss()
             }
         }
     }
@@ -778,7 +817,6 @@ fun CityManagerBottomSheet(
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
-            // 搜索框（后续实现搜索页面）
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -805,7 +843,6 @@ fun CityManagerBottomSheet(
                 items(cityList, key = { it.name }) { city ->
                     CityItem(
                         city = city,
-                        viewModel = viewModel,
                         onCitySelected = {
                             viewModel.selectCity(city)
                             onDismiss()
@@ -819,7 +856,7 @@ fun CityManagerBottomSheet(
 }
 
 @Composable
-fun CityItem(city: CityWeather, viewModel: WeatherViewModel, onCitySelected: () -> Unit) {
+fun CityItem(city: CityWeather, onCitySelected: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()

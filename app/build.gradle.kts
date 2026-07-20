@@ -82,6 +82,7 @@ dependencies {
     // 百度地图 SDK
     implementation("com.baidu.lbsyun:BaiduMapSDK_Location_All:9.6.4")
     implementation("com.baidu.lbsyun:BaiduMapSDK_Map:7.6.4")
+    implementation("com.baidu.lbsyun:BaiduMapSDK_Search:7.6.4")
 
 
     configurations.all {

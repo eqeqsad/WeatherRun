@@ -1,0 +1,1 @@
+我用 Jetpack Compose 写一个搜索城市页面，在 Activity 的 setContent 中调用。遇到几个错误：1. 在 Composable 里调用 finish 和 setResult 报错；2. OutlinedTextField 用了不存在的 onFocusChanged 参数；3. 类型不匹配；4. City 类未定义。请提供一个完整的可运行示例，使用 ViewModel + StateFlow，包含防抖搜索和点击返回结果，并且所有 @Composable 函数正确标记，用 Modifier.onFocusEvent 监听焦点。

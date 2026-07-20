@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 
-// 定义通用的 Resource 结果类（如果项目中已有可删除本定义）
 sealed class Resource<out T> {
     data class Loading<T>(val data: T? = null) : Resource<T>()
     data class Success<T>(val data: T) : Resource<T>()
@@ -33,7 +32,6 @@ class LocationClient(private val context: Context) {
             return@callbackFlow
         }
 
-        // ✅ 关键修复：同意隐私政策
         BaiduLocationClient.setAgreePrivacy(true)
 
         val locationClient = BaiduLocationClient(context)
@@ -41,7 +39,7 @@ class LocationClient(private val context: Context) {
             locationMode = LocationClientOption.LocationMode.Hight_Accuracy
             coorType = "bd09ll"
             scanSpan = 1000
-            setIsNeedAddress(false)
+            setIsNeedAddress(true)
             setIsNeedLocationPoiList(false)
         }
         locationClient.locOption = option
@@ -54,7 +52,36 @@ class LocationClient(private val context: Context) {
                     (location.locType == BDLocation.TypeGpsLocation ||
                             location.locType == BDLocation.TypeNetWorkLocation)) {
                     isLocationReceived = true
-                    val data = LocationData(location.latitude, location.longitude)
+
+                    // 精细化地名提取：优先区县，再从 addrStr 补充
+                    var city = location.district
+                    if (city.isNullOrEmpty() || city == location.city) {
+                        val addr = location.addrStr
+                        if (!addr.isNullOrEmpty()) {
+                            // 格式：中国,省份,城市,区县,详细地址
+                            val parts = addr.split(",")
+                            if (parts.size >= 4) {
+                                city = parts[3].trim()
+                            } else if (parts.size >= 3) {
+                                city = parts[2].trim()
+                            }
+                        }
+                    }
+                    if (city.isNullOrEmpty()) {
+                        city = location.city
+                    }
+                    if (city.isNullOrEmpty()) {
+                        city = location.province
+                    }
+                    if (city.isNullOrEmpty()) {
+                        city = "未知城市"
+                    }
+
+                    val data = LocationData(
+                        latitude = location.latitude,
+                        longitude = location.longitude,
+                        city = city
+                    )
                     trySend(Resource.Success(data))
                     close()
                 }
@@ -66,12 +93,10 @@ class LocationClient(private val context: Context) {
 
         trySend(Resource.Loading())
 
-        // 超时处理（10秒后如果还没定位成功，使用默认位置）
         val timeoutJob = launch {
             delay(10000L)
             if (!isLocationReceived) {
-                // 默认位置（北京天安门）
-                trySend(Resource.Success(LocationData(39.91489, 116.40387)))
+                trySend(Resource.Error("定位超时，请检查GPS或网络"))
                 close()
             }
         }
