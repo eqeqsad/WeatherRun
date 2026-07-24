@@ -99,7 +99,8 @@ class SportViewModel : ViewModel() {
         _elapsedTime.value = 0L
         _distanceMeters.value = 0f
         _paceSecondsPerKm.value = null
-        _currentLocation.value = null
+        // ★ 保留当前位置，不置 null，以便地图继续显示定位图标
+        // _currentLocation.value = null   // 删除或注释掉这一行
         _pathPoints.value = emptyList()
         _finishReason.value = null
         lastLocation = null

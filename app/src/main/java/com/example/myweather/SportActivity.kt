@@ -3,6 +3,11 @@ package com.example.myweather
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -17,6 +22,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.baidu.location.BDAbstractLocationListener
 import com.baidu.location.BDLocation
@@ -44,23 +50,25 @@ class SportActivity : ComponentActivity() {
     private lateinit var mapView: MapView
     private lateinit var baiduMap: BaiduMap
     private var tracePolyline: Polyline? = null
-    private var currentBearing = 0f  // 保存方向（来自传感器）
+    private var currentBearing = 0f
 
-    // 传感器管理
+    private var isAutoFollow = false
+    private var userInterrupted = false
+    private var isMapInitialized = false
+
+    private var customRunningMarker: BitmapDescriptor? = null
+
     private lateinit var sensorManager: SensorManager
     private var rotationSensor: Sensor? = null
 
-    // 百度定位客户端
     private lateinit var baiduLocationClient: LocationClient
     private val locationListener = object : BDAbstractLocationListener() {
         override fun onReceiveLocation(location: BDLocation) {
             if (location.locType == BDLocation.TypeGpsLocation ||
                 location.locType == BDLocation.TypeNetWorkLocation) {
-                // 仍然打印 GPS 方向，但仅作参考，实际使用传感器方向
-                Log.d(TAG, "定位更新: lat=${location.latitude}, lng=${location.longitude}, gpsDirection=${location.direction}")
+                Log.d(TAG, "定位更新: lat=${location.latitude}, lng=${location.longitude}")
                 val data = LocationData(location.latitude, location.longitude)
                 viewModel.onLocationUpdate(data)
-                // 更新地图（如果已有位置），方向由传感器单独更新
                 viewModel.currentLocation.value?.let { updateMyLocationOnMap(it) }
             } else {
                 Log.w(TAG, "定位失败，错误码：${location.locType}")
@@ -68,7 +76,6 @@ class SportActivity : ComponentActivity() {
         }
     }
 
-    // 传感器监听器（获取设备方向）
     private val sensorListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
             if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR) {
@@ -76,28 +83,22 @@ class SportActivity : ComponentActivity() {
                 SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
                 val orientation = FloatArray(3)
                 SensorManager.getOrientation(rotationMatrix, orientation)
-                // orientation[0] 是方位角（弧度），转为角度，并确保 0~360
                 var azimuth = Math.toDegrees(orientation[0].toDouble()).toFloat()
                 if (azimuth < 0) azimuth += 360f
                 currentBearing = azimuth
-                // 更新地图箭头
                 viewModel.currentLocation.value?.let { updateMyLocationOnMap(it) }
             }
         }
 
-        override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {
-            // 无需处理
-        }
+        override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
     }
 
-    // 鹰眼轨迹（可选）
     private var traceClient: LBSTraceClient? = null
     private var trace: Trace? = null
     private val serviceId = 243068L
     private val entityName = "weather_user_${System.currentTimeMillis()}"
     private var isTracing = false
 
-    // 权限请求
     private val locationPermissionRequest: ActivityResultLauncher<Array<String>> =
         registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
@@ -138,7 +139,6 @@ class SportActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // ✅ 百度地图 SDK 隐私同意和初始化（传入 ApplicationContext）
         SDKInitializer.setAgreePrivacy(applicationContext, true)
         SDKInitializer.initialize(applicationContext)
 
@@ -146,16 +146,28 @@ class SportActivity : ComponentActivity() {
         baiduMap = mapView.map
         baiduMap.isMyLocationEnabled = true
 
-        // ✅ 使用 COMPASS 模式，使箭头指向手机方向（地图不旋转）
+        // 初始使用 NORMAL 模式（运动前）
         baiduMap.setMyLocationConfiguration(
             MyLocationConfiguration(
-                MyLocationConfiguration.LocationMode.COMPASS,
+                MyLocationConfiguration.LocationMode.NORMAL,
                 true,
                 null
             )
         )
 
-        // 初始化传感器
+        baiduMap.setOnMapStatusChangeListener(object : BaiduMap.OnMapStatusChangeListener {
+            override fun onMapStatusChangeStart(mapStatus: MapStatus, reason: Int) {
+                if (reason == BaiduMap.OnMapStatusChangeListener.REASON_GESTURE) {
+                    isAutoFollow = false
+                    userInterrupted = true
+                    Log.d(TAG, "用户手势拖动地图 → 关闭自动跟随，userInterrupted=true")
+                }
+            }
+            override fun onMapStatusChangeStart(mapStatus: MapStatus) {}
+            override fun onMapStatusChange(mapStatus: MapStatus) {}
+            override fun onMapStatusChangeFinish(mapStatus: MapStatus) {}
+        })
+
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
         rotationSensor?.let {
@@ -163,6 +175,8 @@ class SportActivity : ComponentActivity() {
         } ?: run {
             Toast.makeText(this, "设备不支持方向传感器", Toast.LENGTH_SHORT).show()
         }
+
+        customRunningMarker = createCustomLocationMarker()
 
         initBaiduLocation()
         collectViewModelFlows()
@@ -173,10 +187,55 @@ class SportActivity : ComponentActivity() {
                 SportScreen(
                     viewModel = viewModel,
                     mapView = mapView,
-                    activity = this
+                    activity = this,
+                    onCenterClick = { centerToMyLocation() }
                 )
             }
         }
+    }
+
+    /**
+     * 绘制自定义定位图标（用于 COMPASS 模式下也可使用，但箭头始终指北，因为地图旋转）
+     * 这里保留该图标，让运动中的界面更醒目
+     */
+    private fun createCustomLocationMarker(): BitmapDescriptor {
+        val sizeDp = 80
+        val density = resources.displayMetrics.density
+        val px = (sizeDp * density).toInt()
+        val bitmap = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+
+        val centerX = px / 2f
+        val centerY = px / 2f
+        val radius = px / 2f - 4f
+
+        val paintCircle = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.FILL
+        }
+        canvas.drawCircle(centerX, centerY, radius, paintCircle)
+
+        val paintBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = ContextCompat.getColor(this@SportActivity, R.color.purple_500)
+            style = Paint.Style.STROKE
+            strokeWidth = 4f
+        }
+        canvas.drawCircle(centerX, centerY, radius, paintBorder)
+
+        val arrowSize = radius * 0.65f
+        val path = Path().apply {
+            moveTo(centerX, centerY - arrowSize)
+            lineTo(centerX - arrowSize * 0.7f, centerY + arrowSize * 0.3f)
+            lineTo(centerX + arrowSize * 0.7f, centerY + arrowSize * 0.3f)
+            close()
+        }
+        val paintArrow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = ContextCompat.getColor(this@SportActivity, R.color.purple_500)
+            style = Paint.Style.FILL
+        }
+        canvas.drawPath(path, paintArrow)
+
+        return BitmapDescriptorFactory.fromBitmap(bitmap)
     }
 
     private fun initBaiduLocation() {
@@ -202,6 +261,52 @@ class SportActivity : ComponentActivity() {
         lifecycleScope.launch {
             viewModel.pathPoints.collectLatest { points ->
                 updatePolyline(points)
+            }
+        }
+
+        lifecycleScope.launch {
+            viewModel.trackingState.collectLatest { state ->
+                Log.d(TAG, "状态变化: $state, userInterrupted=$userInterrupted")
+                when (state) {
+                    TrackingState.RUNNING -> {
+                        baiduMap.setMyLocationConfiguration(
+                            MyLocationConfiguration(
+                                MyLocationConfiguration.LocationMode.COMPASS,
+                                true,
+                                null
+                            )
+                        )
+                        if (!userInterrupted) {
+                            isAutoFollow = true
+                            centerToMyLocation()
+                            Log.d(TAG, "状态RUNNING → COMPASS模式，恢复跟随")
+                        } else {
+                            Log.d(TAG, "状态RUNNING，但用户已中断 → 不恢复跟随")
+                        }
+                    }
+                    TrackingState.PAUSED, TrackingState.FINISHED -> {
+                        // 1. 切回 NORMAL 模式
+                        baiduMap.setMyLocationConfiguration(
+                            MyLocationConfiguration(
+                                MyLocationConfiguration.LocationMode.NORMAL,
+                                true,
+                                null
+                            )
+                        )
+                        // 2. ★ 重置地图视角为二维俯视图（俯仰角0°，旋转角0°）
+                        val currentZoom = baiduMap.mapStatus.zoom
+                        val mapStatus = MapStatus.Builder()
+                            .rotate(0f)          // 正北朝上
+                            .overlook(0f)        // 俯仰角0度，即俯视图
+                            .zoom(currentZoom)   // 保持当前缩放级别
+                            .build()
+                        baiduMap.animateMapStatus(MapStatusUpdateFactory.newMapStatus(mapStatus))
+
+                        isAutoFollow = false
+                        Log.d(TAG, "${if (state == TrackingState.PAUSED) "暂停" else "结束"} → NORMAL模式，恢复二维视角")
+                    }
+                    else -> { /* IDLE 不做额外处理 */ }
+                }
             }
         }
     }
@@ -245,16 +350,39 @@ class SportActivity : ComponentActivity() {
         val data = MyLocationData.Builder()
             .latitude(location.latitude)
             .longitude(location.longitude)
-            .direction(currentBearing)  // 使用传感器方向
+            .direction(currentBearing)  // 在 COMPASS 下此值用于确定指北方向
             .build()
         baiduMap.setMyLocationData(data)
 
-        // 地图自动跟随（仅在运动时或刚开始时）
-        val shouldFollow = viewModel.trackingState.value == TrackingState.RUNNING ||
-                (viewModel.pathPoints.value.isEmpty() && viewModel.trackingState.value != TrackingState.FINISHED)
-        if (shouldFollow) {
+        if (!isMapInitialized && viewModel.trackingState.value == TrackingState.IDLE) {
             baiduMap.animateMapStatus(MapStatusUpdateFactory.newLatLngZoom(latLng, 18f))
+            isMapInitialized = true
+            Log.d(TAG, "首次定位，地图初始化至当前位置")
+            return
         }
+
+        val shouldFollow = isAutoFollow && viewModel.trackingState.value == TrackingState.RUNNING
+        if (shouldFollow) {
+            Log.d(TAG, "执行地图跟随动画")
+            baiduMap.animateMapStatus(MapStatusUpdateFactory.newLatLngZoom(latLng, 18f))
+        } else {
+            Log.d(TAG, "不移动地图，isAutoFollow=$isAutoFollow, state=${viewModel.trackingState.value}")
+        }
+    }
+
+    fun centerToMyLocation() {
+        Log.d(TAG, "centerToMyLocation() 被调用")
+        val location = viewModel.currentLocation.value
+        if (location == null) {
+            Toast.makeText(this, "尚未获取到位置", Toast.LENGTH_SHORT).show()
+            return
+        }
+        isAutoFollow = true
+        userInterrupted = false
+        isMapInitialized = true
+        val latLng = LatLng(location.latitude, location.longitude)
+        baiduMap.animateMapStatus(MapStatusUpdateFactory.newLatLngZoom(latLng, 18f))
+        Log.d(TAG, "手动定位，恢复自动跟随，userInterrupted=false")
     }
 
     private fun updatePolyline(points: List<LocationData>) {
@@ -277,7 +405,6 @@ class SportActivity : ComponentActivity() {
         }
     }
 
-    // ---------- 鹰眼轨迹（可选） ----------
     private fun initTraceSDK() {
         try {
             LBSTraceClient.setAgreePrivacy(this, true)
@@ -317,7 +444,6 @@ class SportActivity : ComponentActivity() {
         traceClient?.stopGather(null)
     }
 
-    // ---------- 生命周期 ----------
     override fun onResume() {
         super.onResume()
         mapView.onResume()

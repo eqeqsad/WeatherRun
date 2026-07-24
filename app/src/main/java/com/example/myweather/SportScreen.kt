@@ -15,21 +15,19 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.baidu.mapapi.map.MapStatusUpdateFactory
-import com.baidu.mapapi.map.MapView
-import com.baidu.mapapi.model.LatLng
 import android.content.Context
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
-
+import com.baidu.mapapi.map.MapView
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SportScreen(
     viewModel: SportViewModel,
     mapView: MapView,
-    activity: Activity
+    activity: Activity,
+    onCenterClick: () -> Unit   // 必须包含此参数
 ) {
     val context = LocalContext.current
 
@@ -41,13 +39,11 @@ fun SportScreen(
     val targetTimeMinutes by viewModel.targetTimeMinutes.collectAsState()
     val targetDistanceKm by viewModel.targetDistanceKm.collectAsState()
     val finishReason by viewModel.finishReason.collectAsState()
-    val currentLocation by viewModel.currentLocation.collectAsState()  // 新增
+    val currentLocation by viewModel.currentLocation.collectAsState()
 
     var showFinishDialog by remember { mutableStateOf(false) }
     var finishMessage by remember { mutableStateOf("") }
 
-
-    // 目标达成弹窗
     LaunchedEffect(finishReason) {
         finishReason?.let {
             finishMessage = it
@@ -64,15 +60,12 @@ fun SportScreen(
         }
     }
 
-
     Box(modifier = Modifier.fillMaxSize()) {
-        // 百度地图
         AndroidView(
             factory = { mapView },
             modifier = Modifier.fillMaxSize()
         )
 
-        // 顶部返回栏
         Surface(
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
             modifier = Modifier.fillMaxWidth()
@@ -90,35 +83,24 @@ fun SportScreen(
             )
         }
 
-        // ✅ 悬浮定位按钮（右下角，靠近“选择运动模式”面板）
+        // 悬浮定位按钮
         FloatingActionButton(
-            onClick = {
-                currentLocation?.let { loc ->
-                    val latLng = LatLng(loc.latitude, loc.longitude)
-                    mapView.map.animateMapStatus(
-                        MapStatusUpdateFactory.newLatLngZoom(latLng, 18f)
-                    )
-                } ?: run {
-                    Toast.makeText(context, "尚未获取到位置", Toast.LENGTH_SHORT).show()
-                }
-            },
+            onClick = onCenterClick,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 280.dp) // 根据底部面板高度调整
+                .padding(end = 16.dp, bottom = 280.dp)
                 .size(40.dp),
-
             containerColor = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary
         ) {
             Icon(
                 Icons.Default.MyLocation,
                 contentDescription = "定位到当前位置",
-                modifier = Modifier
-                    .size(20.dp)
+                modifier = Modifier.size(20.dp)
             )
         }
 
-        // 底部运动面板
+        // 底部控制面板
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -138,7 +120,6 @@ fun SportScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // 模式选择
                     Text("选择运动模式", style = MaterialTheme.typography.titleMedium)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -160,7 +141,6 @@ fun SportScreen(
                         }
                     }
 
-                    // 目标输入
                     when (sportType) {
                         SportType.TIMED_RUN -> {
                             OutlinedTextField(
@@ -186,10 +166,9 @@ fun SportScreen(
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
-                        else -> { /* 自由跑无需输入 */ }
+                        else -> {}
                     }
 
-                    // 运动数据
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly
@@ -199,7 +178,6 @@ fun SportScreen(
                         SportDataItem(label = "配速", value = formatPace(paceSecondsPerKm))
                     }
 
-                    // 控制按钮
                     when (trackingState) {
                         TrackingState.IDLE -> {
                             Button(
@@ -261,7 +239,10 @@ fun SportScreen(
                         }
                         TrackingState.FINISHED -> {
                             Button(
-                                onClick = { viewModel.resetSport() },
+                                onClick = {
+                                    viewModel.resetSport()
+                                    onCenterClick()   // ★ 新增：定位到当前位置，恢复视角
+                                },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text("重新开始", fontSize = 18.sp)
