@@ -1,16 +1,23 @@
 package com.example.myweather
 
+import android.app.Application
 import android.location.Location
 import android.util.Log
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.myweather.data.model.SportRecord
+import com.example.myweather.data.repository.SportRecordRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-class SportViewModel : ViewModel() {
+class SportViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val repository = SportRecordRepository(application)
+    private var recordSaved = false
+    private var startTimeMillis = 0L
 
     private val _trackingState = MutableStateFlow(TrackingState.IDLE)
     val trackingState: StateFlow<TrackingState> = _trackingState.asStateFlow()
@@ -71,6 +78,7 @@ class SportViewModel : ViewModel() {
             else -> { /* 自由跑无需校验 */ }
         }
 
+        startTimeMillis = System.currentTimeMillis()
         _trackingState.value = TrackingState.RUNNING
         startTimer()
     }
@@ -91,6 +99,7 @@ class SportViewModel : ViewModel() {
         if (_trackingState.value == TrackingState.IDLE || _trackingState.value == TrackingState.FINISHED) return
         stopTimer()
         _trackingState.value = TrackingState.FINISHED
+        saveRecordIfNeeded()
     }
 
     fun resetSport() {
@@ -104,6 +113,8 @@ class SportViewModel : ViewModel() {
         _pathPoints.value = emptyList()
         _finishReason.value = null
         lastLocation = null
+        recordSaved = false
+        startTimeMillis = 0L
     }
 
     fun consumeFinishReason(): String? {
@@ -132,7 +143,7 @@ class SportViewModel : ViewModel() {
                     Log.d("SportVM", "位移被过滤: ${"%.2f".format(segment)}m")
                 }
             }
-            _pathPoints.value = _pathPoints.value + location
+            _pathPoints.value += location
             lastLocation = location
             updatePace()
             checkGoal()
@@ -182,6 +193,48 @@ class SportViewModel : ViewModel() {
             }
             else -> { /* 自由跑不自动结束 */ }
         }
+    }
+
+    private fun saveRecordIfNeeded() {
+        if (recordSaved) return
+        if (_elapsedTime.value <= 0L && _distanceMeters.value <= 0f) return
+        recordSaved = true
+
+        val record = SportRecord(
+            id = System.currentTimeMillis(),
+            sportType = _sportType.value.displayName,
+            startTime = startTimeMillis.takeIf { it > 0L } ?: System.currentTimeMillis(),
+            durationSeconds = _elapsedTime.value,
+            distanceMeters = _distanceMeters.value,
+            paceSecondsPerKm = _paceSecondsPerKm.value,
+            calories = estimateCalories(_distanceMeters.value),
+            target = currentTargetDescription(),
+            pathPoints = downsamplePath(_pathPoints.value)
+        )
+        viewModelScope.launch { repository.addRecord(record) }
+    }
+
+    private fun estimateCalories(distanceMeters: Float): Int {
+        // 简化估算：约 60 千卡 / 公里
+        return (distanceMeters / 1000f * 60f).toInt()
+    }
+
+    private fun currentTargetDescription(): String? {
+        return when (_sportType.value) {
+            SportType.TIMED_RUN -> "${_targetTimeMinutes.value} 分钟"
+            SportType.DISTANCE_RUN -> formatDistance((_targetDistanceKm.value * 1000).toFloat())
+            else -> null
+        }
+    }
+
+    private fun downsamplePath(points: List<LocationData>, maxPoints: Int = 500): List<LocationData> {
+        if (points.size <= maxPoints) return points
+        val result = mutableListOf<LocationData>()
+        val step = (points.size - 1).toDouble() / (maxPoints - 1).toDouble()
+        for (i in 0 until maxPoints) {
+            result.add(points[(i * step).toInt()])
+        }
+        return result
     }
 
     override fun onCleared() {

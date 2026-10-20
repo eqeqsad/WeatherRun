@@ -1,5 +1,6 @@
 package com.example.myweather
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
@@ -19,15 +20,18 @@ import android.content.Context
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.os.VibratorManager
 import com.baidu.mapapi.map.MapView
 
+@SuppressLint("ServiceCast")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SportScreen(
     viewModel: SportViewModel,
     mapView: MapView,
     activity: Activity,
-    onCenterClick: () -> Unit   // 必须包含此参数
+    onCenterClick: () -> Unit,   // 必须包含此参数
+    onHistoryClick: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -50,7 +54,12 @@ fun SportScreen(
             showFinishDialog = true
             viewModel.consumeFinishReason()
 
-            val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 vibrator.vibrate(VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE))
             } else {
@@ -75,6 +84,11 @@ fun SportScreen(
                 navigationIcon = {
                     IconButton(onClick = { activity.finish() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    TextButton(onClick = onHistoryClick) {
+                        Text("历史记录")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

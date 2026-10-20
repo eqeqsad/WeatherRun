@@ -19,11 +19,13 @@ import com.example.myweather.data.repository.WeatherRepository
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore("weather_settings")
 
+@Serializable
 data class LocationData(
     val latitude: Double,
     val longitude: Double,
@@ -85,7 +87,7 @@ class WeatherViewModel(
     private val appContext = getApplication<Application>().applicationContext
 
     private val _permissionState = MutableStateFlow(PermissionState())
-    val permissionState: StateFlow<PermissionState> = _permissionState
+    val permissionState: StateFlow<PermissionState> = _permissionState.asStateFlow()
 
     private val _locationState = MutableStateFlow(LocationState())
     val locationState: StateFlow<LocationState> = _locationState.asStateFlow()
@@ -102,6 +104,9 @@ class WeatherViewModel(
     // 手动选择的坐标（若不为 null 则覆盖自动定位）
     private var customLocation: LocationData? = null
     private var isRefreshing = false
+
+    // 天气请求串行化：同一时间只保留一个在途请求，避免撞上百度免费 1 并发额度
+    private var weatherJob: kotlinx.coroutines.Job? = null
 
     init {
         loadCitiesFromStorage()
@@ -200,7 +205,8 @@ class WeatherViewModel(
 
     private fun fetchWeatherData(location: LocationData) {
         _weatherState.update { it.copy(isLoading = true, error = null) }
-        viewModelScope.launch {
+        weatherJob?.cancel()
+        weatherJob = viewModelScope.launch {
             try {
                 val currentWeather = repository.getCurrentWeather(
                     lat = location.latitude,
@@ -242,7 +248,8 @@ class WeatherViewModel(
     }
 
     private fun fetchWeatherForCity(city: CityWeather) {
-        viewModelScope.launch {
+        weatherJob?.cancel()
+        weatherJob = viewModelScope.launch {
             try {
                 val weather = repository.getCurrentWeather(lat = city.lat, lon = city.lon)
                 if (weather.status == "0") {
@@ -327,6 +334,8 @@ class WeatherViewModel(
                         ?: _cityList.value.firstOrNull()
                     fallbackCity?.let {
                         _selectedCity.value = it.name
+                        // 有兜底城市可展示时清除定位错误，避免错误页挡住已加载的天气
+                        _locationState.update { it.copy(error = null) }
                         fetchWeatherData(LocationData(it.lat, it.lon, it.name))
                     }
                 }
@@ -373,7 +382,7 @@ class WeatherViewModel(
         }
     }
 
-    private fun loadCitiesFromStorage() {
+    private fun  loadCitiesFromStorage() {
         viewModelScope.launch {
             appContext.dataStore.data.collect { settings ->
                 val citiesJson = settings[stringPreferencesKey("cities")]

@@ -2,6 +2,7 @@ package com.example.myweather
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -188,7 +189,8 @@ class SportActivity : ComponentActivity() {
                     viewModel = viewModel,
                     mapView = mapView,
                     activity = this,
-                    onCenterClick = { centerToMyLocation() }
+                    onCenterClick = { centerToMyLocation() },
+                    onHistoryClick = { startActivity(Intent(this, HistoryActivity::class.java)) }
                 )
             }
         }

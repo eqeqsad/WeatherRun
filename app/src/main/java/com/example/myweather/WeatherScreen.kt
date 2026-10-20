@@ -41,6 +41,7 @@ import com.example.myweather.data.mode.WeatherForecastHour
 import com.example.myweather.data.mode.WeatherIndex
 import kotlin.random.Random
 
+
 @Composable
 fun WeatherScreen(
     viewModel: WeatherViewModel
@@ -70,7 +71,7 @@ fun WeatherScreen(
             val lon = data.getDoubleExtra("lon", 0.0)
             if (cityName.isNotEmpty() && lat != 0.0 && lon != 0.0) {
                 Log.d("WeatherScreen", "Received city: $cityName, $lat, $lon")
-                viewModel.addCity(CityWeather(cityName, lat, lon))
+                // 只走 selectCity：fetchWeatherData 刷新首页，成功后 updateCityWeather 自动把城市加入列表
                 viewModel.selectCity(CityWeather(cityName, lat, lon))
             }
         }
@@ -106,6 +107,12 @@ fun WeatherScreen(
             ErrorScreen(
                 message = locationState.error!!,
                 onRetry = { viewModel.refreshLocationForced() }  // 修正为强制刷新
+            )
+        }
+        weatherState.error != null -> {
+            ErrorScreen(
+                message = weatherState.error,
+                onRetry = { viewModel.refreshCurrentWeather() }
             )
         }
         weatherState.currentWeather != null -> {
@@ -801,7 +808,6 @@ fun CityManagerBottomSheet(
             val lat = data.getDoubleExtra("lat", 0.0)
             val lon = data.getDoubleExtra("lon", 0.0)
             if (cityName.isNotEmpty() && lat != 0.0 && lon != 0.0) {
-                viewModel.addCity(CityWeather(cityName, lat, lon))
                 viewModel.selectCity(CityWeather(cityName, lat, lon))
                 onDismiss()
             }

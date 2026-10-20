@@ -37,10 +37,17 @@
         </activity>
         <activity android:name=".SearchCity" />
         <activity android:name=".SportActivity" />
+        <activity android:name=".HistoryActivity" />
+        <activity android:name=".ReplayActivity" />
 
+        <!-- 旧版鉴权（定位/检索等老 SDK 用） -->
         <meta-data
             android:name="com.baidu.lbsapi.API_KEY"
-            android:value="${BAIDU_MAP_AK}" /> <!-- 如果使用 manifestPlaceholders 或直接写死 -->
+            android:value="${BAIDU_MAP_AK}" />
+        <!-- 新版统一鉴权 BaiduApiAuth（地图 SDK 7.6.4 用） -->
+        <meta-data
+            android:name="com.baidu.android.lbs.API_KEY"
+            android:value="${BAIDU_MAP_AK}" />
 
         <!-- 鹰眼轨迹服务 -->
         <service
